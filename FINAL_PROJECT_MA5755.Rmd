@@ -1,0 +1,288 @@
+---
+title: "FINAL PROJECT MA5755"
+author: "GROUP "
+date: "11/05/2022"
+output: html_document
+---
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+```{r Library_Imports}
+library(caTools)
+#install.packages("cli")
+set.seed(123)
+library(boot)
+library(MASS)
+library(ggplot2)
+library(dplyr)
+library(Hmisc)
+library(PerformanceAnalytics)
+library(caret)
+library(InformationValue)
+library(aqp)
+library(soilDB)
+library(dplyr)
+library(visdat)
+library(cowplot)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(e1071)
+library(gbm)
+library(Metrics)
+library(vtreat)
+library(AUC)
+library(tidyverse)
+library(randomForest)
+library(xgboost)
+```
+
+
+```{r EDA}
+filepath="oasis_longitudinal.csv"
+df = read.csv(filepath)
+df=df[!df$Group=='Converted',]
+df$Subject.ID=as.factor(df$Subject.ID)
+df$MRI.ID=as.factor(df$MRI.ID)
+df$Group=as.factor(df$Group)
+df$M.F=as.factor(df$M.F)
+df$Hand=as.factor(df$Hand)
+df$CDR=as.factor(df$CDR)
+summary(df)
+names(df)
+cols= c('M.F','Age','EDUC','SES','MMSE','eTIV','nWBV','ASF','Group')
+df = df[,cols]
+#Missing value imputation
+
+df$SES[is.na(df$SES)]<-median(df$SES,na.rm=TRUE)
+df$MMSE[is.na(df$MMSE)]<-median(df$MMSE,na.rm=TRUE)
+
+summary(df)
+
+par(mar=c(2,2,1,2)) # To set the margins else it would not be able to show all the details
+
+hist(df)
+
+group=ifelse(df$Group=='Demented',1,0)
+pairs(df)
+
+cols = names(df)
+for(i in 1:length(cols)){
+  col=cols[i]
+  if((col!='Group')&&(col!='M.F')&&(col!='CDR')){
+    for(j in i:length(cols)){
+      c=cols[j]
+      if(c!=col && (c!='Group')&&(c!='M.F')&&(c!='CDR')){
+        correlation=abs(cor(df[col],df[c]))
+        #if(correlation>0.6){
+        cat(col," and ",c," correlation is ",round(cor(df[col],df[c]),digits=3)," \n")
+        #print()#}
+      }
+    }
+  }
+}
+
+for(col in names(df)){
+  if(col!='Group' && col!='M.F' && col !='CDR'){
+    correlated=cor(df[col],group)
+    cat(col," correlation value with Group",round(correlated,digits=3),"\n")
+  }
+}
+# Let's remove SES and ASF
+names(df)
+cols= c('M.F','Age','EDUC','MMSE','eTIV','nWBV','Group')
+df = df[,cols]
+a=nrow(df[(df["Group"]=="Demented")&(df["M.F"]=="M"),])
+b=nrow(df[(df["Group"]=="Nondemented")&(df["M.F"]=="M"),])
+c=nrow(df[(df["Group"]=="Demented")&(df["M.F"]=="F"),])
+d=nrow(df[(df["Group"]=="Nondemented")&(df["M.F"]=="F"),])
+mat=data.frame(c(a,c),c(b,d))
+
+barplot(as.matrix(mat),names.arg=c("Demented","Non Demented"),legend.text = c("Male","Female"),ylim=c(0,200))
+```
+
+```{r LDA QDA}
+split = sample.split(df$Group, SplitRatio = 2/3)
+data_train = subset(df, split==TRUE)
+data_test = subset(df, split==FALSE)
+
+lda.fit = lda(Group~M.F+Age+EDUC+MMSE+eTIV+nWBV,data=data_train)
+lda.pred_train = predict(lda.fit)
+conf_matrix_lda_train = table(data_train$Group,lda.pred_train$class,dnn = c('Actual','Predicted'))
+conf_matrix_lda_train
+lda.pred_train$posterior
+
+
+error_lda_train = 1-sum(diag(conf_matrix_lda_train))/nrow(data_train)
+1-error_lda_train
+nrow(data)
+
+qda.fit = qda(Group~M.F+Age+EDUC+MMSE+eTIV+nWBV,data=data_train)
+qda.pred_train = predict(qda.fit)
+conf_matrix_qda_train = table(data_train$Group,qda.pred_train$class,dnn = c('Actual','Predicted'))
+conf_matrix_qda_train
+error_qda_train = 1-sum(diag(conf_matrix_qda_train))/nrow(data_train)
+1-error_qda_train
+
+lda.pred_test = predict(lda.fit,newdata = data_test)
+qda.pred_test = predict(qda.fit,newdata = data_test)
+
+conf_matrix_lda_test = table(data_test$Group,lda.pred_test$class,dnn = c('Actual','Predicted'))
+conf_matrix_lda_test
+
+conf_matrix_qda_test = table(data_test$Group,qda.pred_test$class,dnn = c('Actual','Predicted'))
+conf_matrix_qda_test
+
+error_qda_test = 1-sum(diag(conf_matrix_qda_test))/nrow(data_test)
+1-error_qda_test
+```
+```{r DecisionTree}
+n_train <- round(0.7 * nrow(df)) 
+train_indices <- sample(1:nrow(df), n_train) 
+train <- df[train_indices, ] 
+test <- df[-train_indices, ]
+formula <- Group ~ M.F + Age + EDUC + MMSE + eTIV + nWBV
+model_dt <- rpart(formula = formula,
+               data = train,
+               method = "class",
+               xval = 10)  # 10 fold cross vaildation
+
+summary(model_dt)
+prp(x = model_dt, type=1, extra = 106)
+
+prediction_dt <- predict(object = model_dt,
+                newdata = test,
+                type = "class")
+
+#confusionMatrix(data = prediction_dt,
+                #reference = test$Group)
+
+prediction_dt2 <- predict(object = model_dt,
+                newdata = train,
+                type = "class")
+
+plotcp(model_dt)
+model_dt1 <- rpart(formula = formula,
+               data = train,
+               method = "class",
+               cp=0.13)  #more pruning
+
+summary(model_dt1)
+prp(x = model_dt1, type=1, extra = 106)
+
+prediction_dt1 <- predict(object = model_dt1,
+                newdata = test,
+                type = "class")
+
+
+prediction_dt2 <- predict(object = model_dt1,
+                newdata = train,
+                type = "class")
+
+ 
+```
+
+
+
+```{r RandomForest_XGBoost}
+df<-df%>%mutate_all(~ifelse(is.na(.), median(., na.rm = TRUE), .))
+
+df$Group<-as.factor(df$Group)
+#df$`M/F`<-as.factor(df$`M/F`)
+
+#colnames(df)<-c("Group","MR_delay","Gender","Age","EDUC","SES","MMSE","eTIV","nWBV")
+#set.seed(123)
+
+split_dat<-sample.split(df$Group,SplitRatio = 0.7)
+
+train_data<-df[split_dat,]
+test_data<-df[!split_dat,]
+
+
+trControl <- trainControl(method = "cv",
+                          number = 5,
+                          search = "random")
+
+mtry<-sqrt(ncol(train_data))
+
+rf_random <- train(Group ~ .,
+                   data = train_data,
+                   method = 'rf',
+                   metric = 'Accuracy',
+                   tuneLength  = 15, 
+                   trControl = trControl)
+print(rf_random)
+
+plot(rf_random)
+
+
+modellist <- list()
+
+#train with different ntree parameters
+for (ntree in c(25,50,100,150,200,250,300)){
+  fit <- train(Group~.,
+               data = train_data,
+               method = 'rf',
+               metric = 'Accuracy',
+               tuneGrid = NULL,
+               trControl = trControl,
+               ntree = ntree)
+  key <- toString(ntree)
+  modellist[[key]] <- fit
+}
+
+#Compare results
+results <- resamples(modellist)
+summary(results)
+
+dotplot(results)
+
+
+classifier_RF<-randomForest(Group ~ ., 
+                            data = train_data, 
+                            importance = TRUE,
+                            proximity = TRUE,
+                            ntree=150,
+                            )
+classifier_RF
+
+train_pred<-predict(classifier_RF,train_data)
+
+
+test_pred<-predict(classifier_RF,test_data)
+
+train_rf_CM<-confusionMatrix(train_pred,train_data$Group)
+test_rf_CM<-confusionMatrix(test_pred,test_data$Group)
+
+plot(classifier_RF)
+
+varImpPlot(classifier_RF)
+
+
+
+# Logistic Regression
+
+logistic_model = glm(Group~., 
+                      data = train_data, 
+                      family = "binomial")  
+summary(logistic_model)
+
+train_log_pred<-ifelse(predict(logistic_model,train_data)>0.5,1,0)
+
+test_log_pred<-ifelse(predict(logistic_model,test_data)>0.5,1,0)
+
+train_log_CM<-confusionMatrix(as.factor(train_log_pred),as.factor((as.numeric(train_data$Group)-1)))
+test_log_CM<-confusionMatrix(as.factor(test_log_pred),as.factor((as.numeric(test_data$Group)-1)))
+
+
+#XGboost  
+
+dtrain = xgb.DMatrix(as.matrix(sapply(train_data, as.numeric)), label=(as.numeric(train_data$Group)-1))
+
+dest = xgb.DMatrix(as.matrix(sapply(test_data, as.numeric)), label=(as.numeric(test_data$Group)-1))
+
+xg_classifier<-xgboost(data = dtrain, nthread = 2, nrounds = 20, objective = "binary:logistic", verbose = 2)
+
+xg_predict_test<-ifelse(predict(xg_classifier,dest)>0.5,1,0)
+
+XG_boost_test_CM<-confusionMatrix(as.factor(xg_predict_test),as.factor((as.numeric(test_data$Group)-1)))
+
+```
